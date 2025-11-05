@@ -1,4 +1,4 @@
-# sensor.empowerpersonalcapital
+# sensor.personalcapital
 Personal Capital component for [Home Assistant](https://www.home-assistant.io/)
 
 [![GitHub Release][releases-shield]][releases]

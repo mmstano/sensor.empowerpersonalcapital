@@ -22,13 +22,18 @@ To get started put all contents of `/custom_components/personalcapital/` here:
 
 ```yaml
 sensor:
-  platform: personalcapital
-  email: iantrich@email.com
-  password: 12345
-  unit_of_measurement: CAD
-  monitored_categories:
-    - investment
-    - cash
+  - platform: empower_ret
+    email: your_email@example.com
+    password: your_password
+    unit_of_measurement: USD  # Optional, defaults to USD
+    monitored_categories:      # Optional, specify which sensors you want
+      - investment
+      - cash
+      - mortgage
+      - credit
+      - loan
+      - other_asset
+      - other_liability
 ```
 
 **Configuration variables:**

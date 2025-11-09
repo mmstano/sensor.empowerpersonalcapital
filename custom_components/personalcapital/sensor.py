@@ -1,7 +1,8 @@
 """
-Support for Empower Personal Capital sensors (updated from Personal Capital).
+Support for Empower (formerly Personal Capital) sensors.
 
-Uses the empower_personal_capital library to fetch account/net worth data.
+Refactored to use ChocoTonic's empower_personal_capital library:
+https://github.com/ChocoTonic/empower_personal_capital
 """
 
 import logging
@@ -14,17 +15,18 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import PLATFORM_SCHEMA
 from homeassistant.util import Throttle
 
-__version__ = '0.3.0'
+# Import from the local library (ChocoTonic version)
+from .personalcapital import PersonalCapital, RequireTwoFactorException, TwoFactorVerificationModeEnum
 
-REQUIREMENTS = ['empower_personal_capital']
+__version__ = '0.2.0-empower'
 
 CONF_EMAIL = 'email'
 CONF_PASSWORD = 'password'
 CONF_UNIT_OF_MEASUREMENT = 'unit_of_measurement'
 CONF_CATEGORIES = 'monitored_categories'
 
-SESSION_FILE = '.empower-session'
-DATA_EMPOWER = 'empower_cache'
+SESSION_FILE = '.pc-session'
+DATA_PERSONAL_CAPITAL = 'personalcapital_cache'
 
 ATTR_NETWORTH = 'networth'
 ATTR_ASSETS = 'assets'
@@ -57,72 +59,94 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_CATEGORIES, default=[]): vol.All(cv.ensure_list, [vol.In(SENSOR_TYPES)]),
 })
 
+_CONFIGURING = {}
 _LOGGER = logging.getLogger(__name__)
+
+
+def request_app_setup(hass, config, pc, add_devices, discovery_info=None):
+    """Request configuration steps from the user for 2FA verification."""
+    configurator = hass.components.configurator
+
+    def empower_configuration_callback(data):
+        """Run when the verification code is entered."""
+        try:
+            pc.two_factor_authenticate(TwoFactorVerificationModeEnum.SMS, data.get('verification_code'))
+            pc.authenticate_password(config.get(CONF_PASSWORD))
+            save_session(hass, pc.get_session())
+            continue_setup_platform(hass, config, pc, add_devices, discovery_info)
+        except Exception as ex:
+            configurator.notify_errors(_CONFIGURING['empower_ret'], f"Verification failed: {ex}")
+
+    if 'empower_ret' not in _CONFIGURING:
+        try:
+            pc.login(config.get(CONF_EMAIL), config.get(CONF_PASSWORD))
+        except RequireTwoFactorException:
+            _LOGGER.info("Empower RET: 2FA required, sending challenge...")
+            pc.two_factor_challenge(TwoFactorVerificationModeEnum.SMS)
+
+        _CONFIGURING['empower_ret'] = configurator.request_config(
+            'Empower (Personal Capital)',
+            empower_configuration_callback,
+            description="Verification code sent to your phone via SMS",
+            submit_caption='Verify',
+            fields=[{
+                'id': 'verification_code',
+                'name': "Verification code",
+                'type': 'string'
+            }]
+        )
 
 
 def load_session(hass):
     try:
         with open(hass.config.path(SESSION_FILE)) as data_file:
             return json.load(data_file)
-    except Exception:
+    except (IOError, ValueError):
         return {}
 
 
 def save_session(hass, session):
     with open(hass.config.path(SESSION_FILE), 'w') as data_file:
-        json.dump(session, data_file)
+        data_file.write(json.dumps(session))
 
 
 def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Set up the Empower Personal Capital sensors."""
-    from empower_personal_capital import PersonalCapital, RequireTwoFactorException, TwoFactorVerificationModeEnum
-
+    """Set up the Empower (Personal Capital) platform."""
     pc = PersonalCapital()
     session = load_session(hass)
-    email = config.get(CONF_EMAIL)
-    password = config.get(CONF_PASSWORD)
 
     if session:
         pc.set_session(session)
+        try:
+            pc.login(config.get(CONF_EMAIL), config.get(CONF_PASSWORD))
+            continue_setup_platform(hass, config, pc, add_devices, discovery_info)
+        except RequireTwoFactorException:
+            request_app_setup(hass, config, pc, add_devices, discovery_info)
+        except Exception as ex:
+            _LOGGER.error(f"Empower RET: Failed login with existing session: {ex}")
+            request_app_setup(hass, config, pc, add_devices, discovery_info)
+    else:
+        request_app_setup(hass, config, pc, add_devices, discovery_info)
 
-    try:
-        pc.login(email, password)
-    except RequireTwoFactorException:
-        pc.two_factor_challenge(TwoFactorVerificationModeEnum.SMS)
-        code = input("Enter 2FA code: ")
-        pc.two_factor_authenticate(TwoFactorVerificationModeEnum.SMS, code)
-        pc.authenticate_password(password)
 
-    save_session(hass, pc.get_session())
+def continue_setup_platform(hass, config, pc, add_devices, discovery_info=None):
+    """Finish setting up sensors after login."""
+    if "empower_ret" in _CONFIGURING:
+        hass.components.configurator.request_done(_CONFIGURING.pop("empower_ret"))
 
-    rest_pc = EmpowerAccountData(pc)
+    rest_pc = PersonalCapitalAccountData(pc, config)
     uom = config[CONF_UNIT_OF_MEASUREMENT]
+    sensors = []
+
     categories = config[CONF_CATEGORIES] if config[CONF_CATEGORIES] else SENSOR_TYPES.keys()
-
-    sensors = [EmpowerNetWorthSensor(rest_pc, uom)]
+    sensors.append(PersonalCapitalNetWorthSensor(rest_pc, uom))
     for category in categories:
-        sensors.append(EmpowerCategorySensor(hass, rest_pc, uom, category))
-
+        sensors.append(PersonalCapitalCategorySensor(hass, rest_pc, uom, category))
     add_devices(sensors, True)
 
 
-class EmpowerAccountData(object):
-    """Get data from Empower Personal Capital."""
-
-    def __init__(self, pc):
-        self._pc = pc
-        self.data = None
-
-    @Throttle(MIN_TIME_BETWEEN_UPDATES)
-    def update(self):
-        """Fetch latest data from Empower."""
-        self.data = self._pc.fetch('/newaccount/getAccounts')
-        if not self.data or not self.data.json()['spHeader']['success']:
-            _LOGGER.warning("Failed to fetch account data, re-login required.")
-
-
-class EmpowerNetWorthSensor(Entity):
-    """Representation of net worth sensor for Empower Personal Capital."""
+class PersonalCapitalNetWorthSensor(Entity):
+    """Representation of Empower net worth sensor."""
 
     def __init__(self, rest, unit_of_measurement):
         self._rest = rest
@@ -134,10 +158,10 @@ class EmpowerNetWorthSensor(Entity):
 
     def update(self):
         self._rest.update()
-        data = self._rest.data.json()['spData']
+        data = self._rest.data.json().get('spData', {})
         self._state = data.get('networth', 0.0)
         self._assets = data.get('assets', 0.0)
-        self._liabilities = data.get('liabilities', 0.0)
+        self._liabilities = format_balance(True, data.get('liabilities', 0.0))
 
     @property
     def name(self):
@@ -153,7 +177,7 @@ class EmpowerNetWorthSensor(Entity):
 
     @property
     def icon(self):
-        return 'mdi:coin'
+        return 'mdi:finance'
 
     @property
     def device_state_attributes(self):
@@ -163,8 +187,8 @@ class EmpowerNetWorthSensor(Entity):
         }
 
 
-class EmpowerCategorySensor(Entity):
-    """Representation of individual category sensors for Empower Personal Capital."""
+class PersonalCapitalCategorySensor(Entity):
+    """Representation of an Empower category sensor."""
 
     def __init__(self, hass, rest, unit_of_measurement, sensor_type):
         self.hass = hass
@@ -179,14 +203,14 @@ class EmpowerCategorySensor(Entity):
 
     def update(self):
         self._rest.update()
-        data = self._rest.data.json()['spData']
+        data = self._rest.data.json().get('spData', {})
         self._state = format_balance(self._inverse_sign, data.get(self._balanceName, 0.0))
         accounts = data.get('accounts', [])
         self.hass.data[self._productType] = {'accounts': []}
 
         for account in accounts:
             if ((self._productType == account.get('productType')) or
-                (self._accountType == account.get('accountType', ''))) and account.get('closeDate', '') == '':
+                (self._accountType == account.get('accountType', ''))) and not account.get('closeDate'):
                 self.hass.data[self._productType]['accounts'].append({
                     "name": account.get('name', ''),
                     "firm_name": account.get('firmName', ''),
@@ -212,18 +236,38 @@ class EmpowerCategorySensor(Entity):
 
     @property
     def icon(self):
-        return 'mdi:coin'
+        return 'mdi:bank'
 
     @property
     def device_state_attributes(self):
         return self.hass.data[self._productType]
 
 
+class PersonalCapitalAccountData:
+    """Fetch Empower account data."""
+
+    def __init__(self, pc, config):
+        self._pc = pc
+        self.data = None
+        self._config = config
+
+    @Throttle(MIN_TIME_BETWEEN_UPDATES)
+    def update(self):
+        try:
+            self.data = self._pc.fetch('/newaccount/getAccounts')
+            if not self.data or not self.data.json()['spHeader'].get('success', False):
+                _LOGGER.warning("Empower fetch failed, retrying login...")
+                self._pc.login(self._config[CONF_EMAIL], self._config[CONF_PASSWORD])
+                self.data = self._pc.fetch('/newaccount/getAccounts')
+        except Exception as ex:
+            _LOGGER.error(f"Empower RET: data fetch failed: {ex}")
+
+
 def how_long_ago(last_epoch):
-    elapsed = time.time() - last_epoch
-    days = elapsed // 86400
-    hours = elapsed // 3600 % 24
-    minutes = elapsed // 60 % 60
+    delta = time.time() - last_epoch
+    days = delta // 86400
+    hours = delta // 3600 % 24
+    minutes = delta // 60 % 60
     if days > 0:
         return f"{int(days)} days"
     if hours > 0:

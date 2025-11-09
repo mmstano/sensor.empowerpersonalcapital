@@ -3,6 +3,6 @@
   "name": "Empower Personal Capital",
   "version": "0.2.0",
   "requirements": ["empower_personal_capital"],
-  "codeowners": [],
+  "codeowners": [@iantrich],
   "iot_class": "cloud_polling"
 }

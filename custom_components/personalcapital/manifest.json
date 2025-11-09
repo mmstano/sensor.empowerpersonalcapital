@@ -1,10 +1,10 @@
 {
-  "domain": "empower_personal_capital",
-  "name": "Empower Personal Capital",
-  "documentation": "https://github.com/custom-components/sensor.personalcapital/blob/master/README.md",
+  "domain": "empower_ret",
+  "name": "Empower RET (Personal Capital)",
+  "documentation": "https://github.com/ChocoTonic/empower_personal_capital",
   "dependencies": [],
-  "codeowners": ["@iantrich"],
-  "requirements": ["empower_personal_capital"],
+  "codeowners": ["@ChocoTonic", "@iantrich", "@mmstano"],
+  "requirements": [],
   "version": "0.3.0",
   "iot_class": "cloud_polling"
 }

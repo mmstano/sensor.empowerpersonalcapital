@@ -5,6 +5,6 @@
   "dependencies": [],
   "codeowners": ["@iantrich"],
   "requirements": ["empower_personal_capital"],
-  "version": "0.2.0",
+  "version": "0.3.0",
   "iot_class": "cloud_polling"
 }

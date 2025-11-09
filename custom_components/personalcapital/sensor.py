@@ -14,7 +14,7 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import PLATFORM_SCHEMA
 from homeassistant.util import Throttle
 
-__version__ = '0.2.0'
+__version__ = '0.3.0'
 
 REQUIREMENTS = ['empower_personal_capital']
 
@@ -29,12 +29,25 @@ DATA_EMPOWER = 'empower_cache'
 ATTR_NETWORTH = 'networth'
 ATTR_ASSETS = 'assets'
 ATTR_LIABILITIES = 'liabilities'
+ATTR_INVESTMENT = 'investment'
+ATTR_MORTGAGE = 'mortgage'
+ATTR_CASH = 'cash'
+ATTR_OTHER_ASSET = 'other_asset'
+ATTR_OTHER_LIABILITY = 'other_liability'
+ATTR_CREDIT = 'credit'
+ATTR_LOAN = 'loan'
 
 SCAN_INTERVAL = timedelta(minutes=5)
 MIN_TIME_BETWEEN_UPDATES = timedelta(minutes=30)
 
 SENSOR_TYPES = {
-    ATTR_NETWORTH: ['Net Worth'],
+    ATTR_INVESTMENT: ['INVESTMENT', '', 'investmentAccountsTotal', 'Investment', False],
+    ATTR_MORTGAGE: ['MORTGAGE', '', 'mortgageAccountsTotal', 'Mortgage', True],
+    ATTR_CASH: ['BANK', 'Cash', 'cashAccountsTotal', 'Cash', False],
+    ATTR_OTHER_ASSET: ['OTHER_ASSETS', '', 'otherAssetAccountsTotal', 'Other Asset', False],
+    ATTR_OTHER_LIABILITY: ['OTHER_LIABILITIES', '', 'otherLiabilitiesAccountsTotal', 'Other Liability', True],
+    ATTR_CREDIT: ['CREDIT_CARD', '', 'creditCardAccountsTotal', 'Credit', True],
+    ATTR_LOAN: ['LOAN', '', 'loanAccountsTotal', 'Loan', True],
 }
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
@@ -44,7 +57,6 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_CATEGORIES, default=[]): vol.All(cv.ensure_list, [vol.In(SENSOR_TYPES)]),
 })
 
-_CONFIGURING = {}
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -67,7 +79,6 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
 
     pc = PersonalCapital()
     session = load_session(hass)
-
     email = config.get(CONF_EMAIL)
     password = config.get(CONF_PASSWORD)
 
@@ -83,9 +94,15 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
         pc.authenticate_password(password)
 
     save_session(hass, pc.get_session())
+
     rest_pc = EmpowerAccountData(pc)
     uom = config[CONF_UNIT_OF_MEASUREMENT]
+    categories = config[CONF_CATEGORIES] if config[CONF_CATEGORIES] else SENSOR_TYPES.keys()
+
     sensors = [EmpowerNetWorthSensor(rest_pc, uom)]
+    for category in categories:
+        sensors.append(EmpowerCategorySensor(hass, rest_pc, uom, category))
+
     add_devices(sensors, True)
 
 
@@ -116,7 +133,6 @@ class EmpowerNetWorthSensor(Entity):
         self.update()
 
     def update(self):
-        """Fetch new state."""
         self._rest.update()
         data = self._rest.data.json()['spData']
         self._state = data.get('networth', 0.0)
@@ -145,3 +161,75 @@ class EmpowerNetWorthSensor(Entity):
             ATTR_ASSETS: self._assets,
             ATTR_LIABILITIES: self._liabilities
         }
+
+
+class EmpowerCategorySensor(Entity):
+    """Representation of individual category sensors for Empower Personal Capital."""
+
+    def __init__(self, hass, rest, unit_of_measurement, sensor_type):
+        self.hass = hass
+        self._rest = rest
+        self._productType = SENSOR_TYPES[sensor_type][0]
+        self._accountType = SENSOR_TYPES[sensor_type][1]
+        self._balanceName = SENSOR_TYPES[sensor_type][2]
+        self._name = f'Empower {SENSOR_TYPES[sensor_type][3]}'
+        self._inverse_sign = SENSOR_TYPES[sensor_type][4]
+        self._state = None
+        self._unit_of_measurement = unit_of_measurement
+
+    def update(self):
+        self._rest.update()
+        data = self._rest.data.json()['spData']
+        self._state = format_balance(self._inverse_sign, data.get(self._balanceName, 0.0))
+        accounts = data.get('accounts', [])
+        self.hass.data[self._productType] = {'accounts': []}
+
+        for account in accounts:
+            if ((self._productType == account.get('productType')) or
+                (self._accountType == account.get('accountType', ''))) and account.get('closeDate', '') == '':
+                self.hass.data[self._productType]['accounts'].append({
+                    "name": account.get('name', ''),
+                    "firm_name": account.get('firmName', ''),
+                    "logo": account.get('logoPath', ''),
+                    "balance": format_balance(self._inverse_sign, account.get('balance', 0.0)),
+                    "account_type": account.get('accountType', ''),
+                    "url": account.get('homeUrl', ''),
+                    "currency": account.get('currency', ''),
+                    "refreshed": how_long_ago(account.get('lastRefreshed', 0)) + ' ago',
+                })
+
+    @property
+    def name(self):
+        return self._name
+
+    @property
+    def state(self):
+        return self._state
+
+    @property
+    def unit_of_measurement(self):
+        return self._unit_of_measurement
+
+    @property
+    def icon(self):
+        return 'mdi:coin'
+
+    @property
+    def device_state_attributes(self):
+        return self.hass.data[self._productType]
+
+
+def how_long_ago(last_epoch):
+    elapsed = time.time() - last_epoch
+    days = elapsed // 86400
+    hours = elapsed // 3600 % 24
+    minutes = elapsed // 60 % 60
+    if days > 0:
+        return f"{int(days)} days"
+    if hours > 0:
+        return f"{int(hours)} hours"
+    return f"{int(minutes)} minutes"
+
+
+def format_balance(inverse_sign, balance):
+    return -1.0 * balance if inverse_sign else balance

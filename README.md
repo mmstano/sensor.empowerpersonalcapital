@@ -1,5 +1,5 @@
 # sensor.empowerpersonalcapital
-Empower RET (Personal Capital) component for [Home Assistant](https://www.home-assistant.io/)
+Empower RET (Personal Capital) component for [Home Assistant](https://www.home-assistant.io/) Rebuilt using ChocoTonic's library.
 
 [![GitHub Release][releases-shield]][releases]
 [![License][license-shield]](LICENSE.md)

@@ -1,5 +1,5 @@
-# sensor.personalcapital
-Personal Capital component for [Home Assistant](https://www.home-assistant.io/)
+# sensor.empowerpersonalcapital
+Empower RET (Personal Capital) component for [Home Assistant](https://www.home-assistant.io/)
 
 [![GitHub Release][releases-shield]][releases]
 [![License][license-shield]](LICENSE.md)
@@ -15,8 +15,8 @@ Hey dude! Help me out for a couple of :beers: or a :coffee:!
 
 [![coffee](https://www.buymeacoffee.com/assets/img/custom_images/black_img.png)](https://www.buymeacoffee.com/zJtVxUAgH)
 
-To get started put all contents of `/custom_components/personalcapital/` here:
-`<config directory>/custom_components/personalcapital/`. You can use this component with the custom [Personal Capital Lovelace card](https://github.com/custom-cards/pc-card).
+To get started put all contents of `/custom_components/empower_ret/` here:
+`<config directory>/custom_components/empower_ret/`. 
 
 **Example configuration.yaml:**
 

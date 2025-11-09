@@ -1,8 +1,10 @@
 {
   "domain": "empower_personal_capital",
   "name": "Empower Personal Capital",
-  "version": "0.2.0",
-  "requirements": ["empower_personal_capital"],
+  "documentation": "https://github.com/custom-components/sensor.personalcapital/blob/master/README.md",
+  "dependencies": [],
   "codeowners": ["@iantrich"],
+  "requirements": ["empower_personal_capital"],
+  "version": "0.2.0",
   "iot_class": "cloud_polling"
 }

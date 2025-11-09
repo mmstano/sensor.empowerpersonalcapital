@@ -1,5 +1,5 @@
 """
-Support for Empower (formerly Personal Capital) sensors.
+Support for Empower / Personal Capital sensors.
 
 Refactored to use ChocoTonic's empower_personal_capital library:
 https://github.com/ChocoTonic/empower_personal_capital
@@ -15,7 +15,7 @@ import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import PLATFORM_SCHEMA
 from homeassistant.util import Throttle
 
-# Import from the local library (ChocoTonic version)
+# Local import from the same custom component folder
 from .personalcapital import PersonalCapital, RequireTwoFactorException, TwoFactorVerificationModeEnum
 
 __version__ = '0.2.0-empower'
@@ -26,7 +26,6 @@ CONF_UNIT_OF_MEASUREMENT = 'unit_of_measurement'
 CONF_CATEGORIES = 'monitored_categories'
 
 SESSION_FILE = '.pc-session'
-DATA_PERSONAL_CAPITAL = 'personalcapital_cache'
 
 ATTR_NETWORTH = 'networth'
 ATTR_ASSETS = 'assets'
@@ -59,43 +58,10 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_CATEGORIES, default=[]): vol.All(cv.ensure_list, [vol.In(SENSOR_TYPES)]),
 })
 
-_CONFIGURING = {}
 _LOGGER = logging.getLogger(__name__)
+_CONFIGURING = {}
 
-
-def request_app_setup(hass, config, pc, add_devices, discovery_info=None):
-    """Request configuration steps from the user for 2FA verification."""
-    configurator = hass.components.configurator
-
-    def empower_configuration_callback(data):
-        """Run when the verification code is entered."""
-        try:
-            pc.two_factor_authenticate(TwoFactorVerificationModeEnum.SMS, data.get('verification_code'))
-            pc.authenticate_password(config.get(CONF_PASSWORD))
-            save_session(hass, pc.get_session())
-            continue_setup_platform(hass, config, pc, add_devices, discovery_info)
-        except Exception as ex:
-            configurator.notify_errors(_CONFIGURING['empower_ret'], f"Verification failed: {ex}")
-
-    if 'empower_ret' not in _CONFIGURING:
-        try:
-            pc.login(config.get(CONF_EMAIL), config.get(CONF_PASSWORD))
-        except RequireTwoFactorException:
-            _LOGGER.info("Empower RET: 2FA required, sending challenge...")
-            pc.two_factor_challenge(TwoFactorVerificationModeEnum.SMS)
-
-        _CONFIGURING['empower_ret'] = configurator.request_config(
-            'Empower (Personal Capital)',
-            empower_configuration_callback,
-            description="Verification code sent to your phone via SMS",
-            submit_caption='Verify',
-            fields=[{
-                'id': 'verification_code',
-                'name': "Verification code",
-                'type': 'string'
-            }]
-        )
-
+# ----------------- Session Management -----------------
 
 def load_session(hass):
     try:
@@ -109,9 +75,10 @@ def save_session(hass, session):
     with open(hass.config.path(SESSION_FILE), 'w') as data_file:
         data_file.write(json.dumps(session))
 
+# ----------------- Setup Platform -----------------
 
 def setup_platform(hass, config, add_devices, discovery_info=None):
-    """Set up the Empower (Personal Capital) platform."""
+    """Set up Empower / Personal Capital platform."""
     pc = PersonalCapital()
     session = load_session(hass)
 
@@ -119,17 +86,52 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
         pc.set_session(session)
         try:
             pc.login(config.get(CONF_EMAIL), config.get(CONF_PASSWORD))
-            continue_setup_platform(hass, config, pc, add_devices, discovery_info)
+            continue_setup_platform(hass, config, pc, add_devices)
         except RequireTwoFactorException:
-            request_app_setup(hass, config, pc, add_devices, discovery_info)
+            request_app_setup(hass, config, pc, add_devices)
         except Exception as ex:
-            _LOGGER.error(f"Empower RET: Failed login with existing session: {ex}")
-            request_app_setup(hass, config, pc, add_devices, discovery_info)
+            _LOGGER.error(f"Empower RET login failed with session: {ex}")
+            request_app_setup(hass, config, pc, add_devices)
     else:
-        request_app_setup(hass, config, pc, add_devices, discovery_info)
+        request_app_setup(hass, config, pc, add_devices)
 
+# ----------------- 2FA Setup -----------------
 
-def continue_setup_platform(hass, config, pc, add_devices, discovery_info=None):
+def request_app_setup(hass, config, pc, add_devices):
+    """Request 2FA verification code from user."""
+    configurator = hass.components.configurator
+
+    def configuration_callback(data):
+        try:
+            pc.two_factor_authenticate(TwoFactorVerificationModeEnum.SMS, data.get('verification_code'))
+            pc.authenticate_password(config.get(CONF_PASSWORD))
+            save_session(hass, pc.get_session())
+            continue_setup_platform(hass, config, pc, add_devices)
+        except Exception as ex:
+            configurator.notify_errors(_CONFIGURING['empower_ret'], f"Verification failed: {ex}")
+
+    if 'empower_ret' not in _CONFIGURING:
+        try:
+            pc.login(config.get(CONF_EMAIL), config.get(CONF_PASSWORD))
+        except RequireTwoFactorException:
+            _LOGGER.info("Empower RET: 2FA required, sending SMS challenge...")
+            pc.two_factor_challenge(TwoFactorVerificationModeEnum.SMS)
+
+        _CONFIGURING['empower_ret'] = configurator.request_config(
+            'Empower (Personal Capital)',
+            configuration_callback,
+            description="Verification code sent to your phone via SMS",
+            submit_caption='Verify',
+            fields=[{
+                'id': 'verification_code',
+                'name': "Verification code",
+                'type': 'string'
+            }]
+        )
+
+# ----------------- Finalize Setup -----------------
+
+def continue_setup_platform(hass, config, pc, add_devices):
     """Finish setting up sensors after login."""
     if "empower_ret" in _CONFIGURING:
         hass.components.configurator.request_done(_CONFIGURING.pop("empower_ret"))
@@ -144,9 +146,10 @@ def continue_setup_platform(hass, config, pc, add_devices, discovery_info=None):
         sensors.append(PersonalCapitalCategorySensor(hass, rest_pc, uom, category))
     add_devices(sensors, True)
 
+# ----------------- Sensor Classes -----------------
 
 class PersonalCapitalNetWorthSensor(Entity):
-    """Representation of Empower net worth sensor."""
+    """Empower Net Worth Sensor."""
 
     def __init__(self, rest, unit_of_measurement):
         self._rest = rest
@@ -188,7 +191,7 @@ class PersonalCapitalNetWorthSensor(Entity):
 
 
 class PersonalCapitalCategorySensor(Entity):
-    """Representation of an Empower category sensor."""
+    """Empower Account Category Sensor."""
 
     def __init__(self, hass, rest, unit_of_measurement, sensor_type):
         self.hass = hass
@@ -242,9 +245,10 @@ class PersonalCapitalCategorySensor(Entity):
     def device_state_attributes(self):
         return self.hass.data[self._productType]
 
+# ----------------- Data Handling -----------------
 
 class PersonalCapitalAccountData:
-    """Fetch Empower account data."""
+    """Fetch account data from Empower / Personal Capital."""
 
     def __init__(self, pc, config):
         self._pc = pc
@@ -262,6 +266,7 @@ class PersonalCapitalAccountData:
         except Exception as ex:
             _LOGGER.error(f"Empower RET: data fetch failed: {ex}")
 
+# ----------------- Utilities -----------------
 
 def how_long_ago(last_epoch):
     delta = time.time() - last_epoch
@@ -273,7 +278,6 @@ def how_long_ago(last_epoch):
     if hours > 0:
         return f"{int(hours)} hours"
     return f"{int(minutes)} minutes"
-
 
 def format_balance(inverse_sign, balance):
     return -1.0 * balance if inverse_sign else balance
